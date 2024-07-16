@@ -1,13 +1,14 @@
 import matplotlib.pyplot as plt
 import os
 
+import timm
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torchvision import models, transforms
+from transformers import AutoImageProcessor, AutoModelForImageClassification
 
 from cub_200_dataloader import load_data
-from resnet_model import ResNet18
 
 def train(dataloader, model, loss_fn, optimizer, device, epoch):
     size = len(dataloader.dataset)
@@ -19,22 +20,22 @@ def train(dataloader, model, loss_fn, optimizer, device, epoch):
 
     model.train()
 
-    for batch, (X, y) in enumerate(dataloader):
-        X, y = X.to(device), y.to(device)
+    for batch, (image, label, _) in enumerate(dataloader):
+        image, label = image.to(device), label.to(device)
         
-        y = y.long() - 1
+        label = label.long() - 1
 
-        pred = model(X)
-        loss = loss_fn(pred, y)
+        pred = model(image).logits
+        loss = loss_fn(pred, label)
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
         train_loss += loss
-        correct += (pred.argmax(1) == y).type(torch.float).sum().item()
+        correct += (pred.argmax(1) == label).type(torch.float).sum().item()
 
-        total_processed += len(X)
+        total_processed += len(image)
 
         # if total_processed % 2000 == 0:
         #     idx = torch.randint(0, len(X), (1,)).item()
@@ -63,18 +64,18 @@ def test(dataloader, model, loss_fn, device, epoch):
     model.eval()
 
     with torch.no_grad():
-        for batch, (X, y) in enumerate(dataloader):
-            X, y = X.to(device), y.to(device)
+        for batch, (image, label, _) in enumerate(dataloader):
+            image, label = image.to(device), label.to(device)
             
-            y = y.long() - 1
+            label = label.long() - 1
 
-            pred = model(X)
-            loss = loss_fn(pred, y)
+            pred = model(image).logits
+            loss = loss_fn(pred, label)
 
             test_loss += loss
-            correct += (pred.argmax(1) == y).type(torch.float).sum().item()
+            correct += (pred.argmax(1) == label).type(torch.float).sum().item()
 
-            total_processed += len(X)
+            total_processed += len(image)
 
             print(f"Epoch {epoch+1:>3d} Test {batch+1:>3d}: loss: {test_loss / (batch + 1):>7f}  [{total_processed:>5d}/{size:>5d}]")
 
@@ -85,8 +86,16 @@ def test(dataloader, model, loss_fn, device, epoch):
     print(f"Test Result:\nAccuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f}")
 
 if __name__ == "__main__":
-    csv_file = (os.path.dirname(os.path.abspath(__file__)) + '/CUB_200_2011/cub_200_2011_dataset.csv')
-    img_dir = (os.path.dirname(os.path.abspath(__file__)) + '/CUB_200_2011/CUB_200_2011')
+    csv_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'CUB_200_2011', 'cub_200_2011_dataset.csv')
+    img_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'CUB_200_2011', 'CUB_200_2011')
+
+    processor = AutoImageProcessor.from_pretrained("microsoft/swin-tiny-patch4-window7-224")
+    model = AutoModelForImageClassification.from_pretrained("microsoft/swin-tiny-patch4-window7-224")
+
+    # model = timm.create_model('vit_tiny_patch16_224', pretrained=True, num_classes=200)
+    # model = models.resnet18(weights='IMAGENET1K_V1')
+    # model = ResNet18(num_classes=200)
+
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.RandomRotation(degrees=30, interpolation=transforms.InterpolationMode.NEAREST, expand=False, center=None, fill=0),
@@ -95,23 +104,21 @@ if __name__ == "__main__":
         transforms.RandomApply([
             transforms.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0)),
             transforms.Grayscale(num_output_channels=3),
-            transforms.ElasticTransform(alpha=50.0, sigma=5.0, interpolation=transforms.InterpolationMode.BILINEAR, fill=0),
         ], p=0.3),
-        transforms.ToTensor(),
     ])
 
-    train_loader, test_loader = load_data(csv_file, img_dir, batch_size=100, transform=transform)
+    image_transform = lambda image: processor(images=transform(image), return_tensors="pt")["pixel_values"].squeeze(0)
 
-    model = models.resnet18(weights='IMAGENET1K_V1')
-    # model = ResNet18(num_classes=200)
+    train_loader, test_loader = load_data(csv_file, img_dir, batch_size=100, transform=image_transform)
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f"Device used: {device}")
     model = model.to(device)
 
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+    optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-5)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
+    # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
 
     num_epochs = 40
 
@@ -119,7 +126,8 @@ if __name__ == "__main__":
         print(f"\n-------------------------------\nEpoch {epoch+1}\n-------------------------------")
         train(train_loader, model, loss_fn, optimizer, device, epoch)
         scheduler.step()
-        if ((epoch + 1) % 2 == 0 and (epoch + 1) != 2) or (epoch + 1) == num_epochs or (epoch + 1) == 1:
+        if (epoch + 1) % 5 == 0 or (epoch + 1) == num_epochs or (epoch + 1) == 1:
             print(f"\n-------------------------------")
             test(test_loader, model, loss_fn, device, epoch)
+
     print("Training complete")

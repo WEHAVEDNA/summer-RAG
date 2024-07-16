@@ -19,7 +19,7 @@ class CUB200Dataset(Dataset):
         label = self.data.iloc[idx, 1]
         if self.transform:
             image = self.transform(image)
-        return image, label
+        return image, label, self.data.iloc[idx, 0]
 
 def load_data(csv_file, img_dir, batch_size=32, transform=None):
     dataset = CUB200Dataset(csv_file, img_dir, transform=transform)
