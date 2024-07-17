@@ -50,4 +50,4 @@ if prompt := st.chat_input("Type here..."):
     else:
         st.error(f"Error: {response.text}")
 
-# streamlit run phi3_chatbot.py
+# streamlit run /home/ihave/summer-RAG/phi3_chatbot.py

@@ -47,4 +47,4 @@ async def generate_text(request: GenerateRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# fastapi run phi3_rest_api.py
+# fastapi run /home/ihave/summer-RAG/phi3_rest_api.py
